@@ -31,6 +31,11 @@ import {
   classifyAcademicRank, 
   evaluateCompetency 
 } from './utils/gradeCalculations';
+import { 
+  syncRequestsWithCloud, 
+  saveCloudRequests, 
+  subscribeCloudRequests 
+} from './services/cloudSync';
 import { ShieldCheck, LogOut, GraduationCap } from 'lucide-react';
 
 export default function App() {
@@ -221,50 +226,81 @@ export default function App() {
       })
       .catch(err => console.log('Community goals offline sync:', err));
 
-    // Robust Sync: Merge Server requests with LocalStorage requests
+    // Robust Multi-Device & Cloud Sync: Merge Server requests, LocalStorage & Cloud Relay
     const syncRequests = async () => {
       try {
         const localSaved = localStorage.getItem('edutrack_requests');
         const localList: RegistrationRequest[] = localSaved ? JSON.parse(localSaved) : [];
 
-        const res = await fetch('/api/registration-requests');
-        const data = await res.json();
-        if (data.success && Array.isArray(data.requests)) {
-          const map = new Map<string, RegistrationRequest>();
-          // 1. Put server requests
-          data.requests.forEach((r: RegistrationRequest) => {
-            if (r.username) map.set(r.username.toLowerCase(), r);
-          });
-          // 2. Merge local requests so pending/approved items created on client aren't lost
-          localList.forEach((r: RegistrationRequest) => {
-            if (!r.username) return;
-            const key = r.username.toLowerCase();
-            if (!map.has(key)) {
-              map.set(key, r);
-            } else {
-              const serverItem = map.get(key)!;
-              if (r.status === 'approved' && serverItem.status !== 'approved') {
-                map.set(key, { ...serverItem, ...r });
-              }
-            }
-          });
-          const merged = Array.from(map.values());
-          setRegistrationRequests(merged);
-          localStorage.setItem('edutrack_requests', JSON.stringify(merged));
-
-          // Sync back merged list to server so file on disk has full records
-          fetch('/api/registration-requests/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ requests: merged }),
-          }).catch(() => {});
+        // 1. First sync with Cloud Relay so cross-device requests appear immediately
+        const cloudMerged = await syncRequestsWithCloud(localList);
+        if (cloudMerged && cloudMerged.length > 0) {
+          setRegistrationRequests(cloudMerged);
+          localStorage.setItem('edutrack_requests', JSON.stringify(cloudMerged));
         }
+
+        // 2. Also try syncing with local server if server is running
+        try {
+          const res = await fetch('/api/registration-requests');
+          const data = await res.json();
+          if (data.success && Array.isArray(data.requests)) {
+            const currentList = cloudMerged && cloudMerged.length > 0 ? cloudMerged : localList;
+            const map = new Map<string, RegistrationRequest>();
+            data.requests.forEach((r: RegistrationRequest) => {
+              if (r.username) map.set(r.username.toLowerCase(), r);
+            });
+            currentList.forEach((r: RegistrationRequest) => {
+              if (!r.username) return;
+              const key = r.username.toLowerCase();
+              if (!map.has(key)) {
+                map.set(key, r);
+              } else {
+                const s = map.get(key)!;
+                if (r.status === 'approved' && s.status !== 'approved') {
+                  map.set(key, { ...s, ...r });
+                }
+              }
+            });
+            const finalMerged = Array.from(map.values());
+            setRegistrationRequests(finalMerged);
+            localStorage.setItem('edutrack_requests', JSON.stringify(finalMerged));
+            saveCloudRequests(finalMerged).catch(() => {});
+          }
+        } catch (_) {}
       } catch (err) {
-        console.log('Requests offline sync:', err);
+        console.log('Requests sync error:', err);
       }
     };
 
     syncRequests();
+
+    // Realtime Cloud Polling for Multi-Device synchronization
+    const unsubscribeCloud = subscribeCloudRequests((cloudList) => {
+      if (cloudList && cloudList.length > 0) {
+        setRegistrationRequests(prev => {
+          const map = new Map<string, RegistrationRequest>();
+          // Put previous items
+          prev.forEach(p => { if (p.username) map.set(p.username.toLowerCase(), p); });
+          // Merge incoming cloud items
+          cloudList.forEach(c => {
+            if (!c || !c.username) return;
+            const key = c.username.toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, c);
+            } else {
+              const existing = map.get(key)!;
+              // If cloud is approved or has newer update
+              if (c.status === 'approved' || (c.status !== existing.status && c.processedAt)) {
+                map.set(key, { ...existing, ...c });
+              }
+            }
+          });
+          const merged = Array.from(map.values());
+          localStorage.setItem('edutrack_requests', JSON.stringify(merged));
+          return merged;
+        });
+      }
+    }, 5000);
 
     // Cross-tab synchronization via BroadcastChannel & Storage Event
     const bc = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('edutrack_sync') : null;
@@ -289,6 +325,7 @@ export default function App() {
     window.addEventListener('storage', handleStorage);
 
     return () => {
+      unsubscribeCloud();
       if (bc) bc.close();
       window.removeEventListener('storage', handleStorage);
     };
@@ -372,6 +409,7 @@ export default function App() {
     setRegistrationRequests(prev => {
       const updated = [newReq, ...prev.filter(r => r.username.toLowerCase() !== newReq.username.toLowerCase())];
       localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      saveCloudRequests(updated).catch(() => {});
       if (typeof BroadcastChannel !== 'undefined') {
         try {
           const ch = new BroadcastChannel('edutrack_sync');
@@ -398,7 +436,7 @@ export default function App() {
       console.log('Approve API offline:', err);
     }
 
-    // 2. Update local requests
+    // 2. Update local requests & Cloud Relay
     const targetReq = registrationRequests.find(r => r.id === requestId);
     setRegistrationRequests(prev => {
       const updated = prev.map(r => {
@@ -413,6 +451,7 @@ export default function App() {
         return r;
       });
       localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      saveCloudRequests(updated).catch(() => {});
       if (typeof BroadcastChannel !== 'undefined') {
         try {
           const ch = new BroadcastChannel('edutrack_sync');
@@ -447,6 +486,7 @@ export default function App() {
         processedBy: 'adminedu',
       } : r);
       localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      saveCloudRequests(updated).catch(() => {});
       if (typeof BroadcastChannel !== 'undefined') {
         try {
           const ch = new BroadcastChannel('edutrack_sync');
@@ -501,6 +541,7 @@ export default function App() {
         return r;
       });
       localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      saveCloudRequests(updated).catch(() => {});
       return updated;
     });
   };
@@ -517,42 +558,46 @@ export default function App() {
     setRegistrationRequests(prev => {
       const updated = prev.filter(r => r.id !== requestId);
       localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      saveCloudRequests(updated).catch(() => {});
       return updated;
     });
   };
 
-  const handleRefreshRequests = () => {
-    fetch('/api/registration-requests')
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && Array.isArray(data.requests)) {
-          const localSaved = localStorage.getItem('edutrack_requests');
-          const localList: RegistrationRequest[] = localSaved ? JSON.parse(localSaved) : [];
-          const map = new Map<string, RegistrationRequest>();
-          data.requests.forEach((r: RegistrationRequest) => {
-            if (r.username) map.set(r.username.toLowerCase(), r);
-          });
-          localList.forEach((r: RegistrationRequest) => {
-            if (!r.username) return;
-            const key = r.username.toLowerCase();
-            if (!map.has(key)) {
-              map.set(key, r);
-            }
-          });
-          const merged = Array.from(map.values());
-          setRegistrationRequests(merged);
-          localStorage.setItem('edutrack_requests', JSON.stringify(merged));
-        }
-      })
-      .catch(err => {
-        console.log('Refresh error:', err);
-        const localSaved = localStorage.getItem('edutrack_requests');
-        if (localSaved) {
-          try {
-            setRegistrationRequests(JSON.parse(localSaved));
-          } catch (_) {}
-        }
-      });
+  const handleRefreshRequests = async () => {
+    const localSaved = localStorage.getItem('edutrack_requests');
+    const localList: RegistrationRequest[] = localSaved ? JSON.parse(localSaved) : [];
+    
+    // Sync with Cloud
+    const cloudMerged = await syncRequestsWithCloud(localList);
+    if (cloudMerged && cloudMerged.length > 0) {
+      setRegistrationRequests(cloudMerged);
+      localStorage.setItem('edutrack_requests', JSON.stringify(cloudMerged));
+    }
+
+    // Try server sync
+    try {
+      const res = await fetch('/api/registration-requests');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.requests)) {
+        const currentList = cloudMerged && cloudMerged.length > 0 ? cloudMerged : localList;
+        const map = new Map<string, RegistrationRequest>();
+        data.requests.forEach((r: RegistrationRequest) => {
+          if (r.username) map.set(r.username.toLowerCase(), r);
+        });
+        currentList.forEach((r: RegistrationRequest) => {
+          if (!r.username) return;
+          const key = r.username.toLowerCase();
+          if (!map.has(key)) {
+            map.set(key, r);
+          }
+        });
+        const merged = Array.from(map.values());
+        setRegistrationRequests(merged);
+        localStorage.setItem('edutrack_requests', JSON.stringify(merged));
+      }
+    } catch (err) {
+      console.log('Server refresh error:', err);
+    }
   };
 
   const handleSelectStudent = (id: string) => {

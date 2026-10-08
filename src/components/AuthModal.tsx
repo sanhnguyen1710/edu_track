@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { UserSession, UserRole, RegistrationRequest } from '../types';
 import { StudentRecord } from '../data/defaultData';
+import { syncRequestsWithCloud, fetchCloudRequests, saveCloudRequests } from '../services/cloudSync';
 
 interface AuthModalProps {
   isOpen: boolean;
