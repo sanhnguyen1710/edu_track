@@ -42,6 +42,8 @@ export const RoadmapsTab: React.FC<RoadmapsTabProps> = ({
 
   const [aiTipLoading, setAiTipLoading] = useState(false);
   const [aiTipContent, setAiTipContent] = useState<string | null>(null);
+  const [deleteErrorMsg, setDeleteErrorMsg] = useState<string | null>(null);
+  const [showConfirmDeleteId, setShowConfirmDeleteId] = useState<string | null>(null);
 
   // Lấy lộ trình đang chọn, nếu không có lấy lộ trình đầu tiên
   const currentRoadmap = activeRoadmaps.find(r => r.id === selectedRoadmapId) || activeRoadmaps[0];
@@ -117,14 +119,21 @@ export const RoadmapsTab: React.FC<RoadmapsTabProps> = ({
 
   const handleDeleteRoadmap = (id: string) => {
     if (activeRoadmaps.length <= 1) {
-      alert('Bạn cần giữ ít nhất một lộ trình trong danh sách!');
+      setDeleteErrorMsg('Bạn cần giữ ít nhất một lộ trình trong danh sách!');
+      setTimeout(() => setDeleteErrorMsg(null), 4000);
       return;
     }
-    if (confirm('Bạn có chắc muốn xóa lịch trình này?')) {
-      const remaining = activeRoadmaps.filter(r => r.id !== id);
-      setActiveRoadmaps(remaining);
+    setShowConfirmDeleteId(id);
+  };
+
+  const confirmDeleteRoadmap = () => {
+    if (!showConfirmDeleteId) return;
+    const remaining = activeRoadmaps.filter(r => r.id !== showConfirmDeleteId);
+    setActiveRoadmaps(remaining);
+    if (remaining.length > 0) {
       setSelectedRoadmapId(remaining[0].id);
     }
+    setShowConfirmDeleteId(null);
   };
 
   if (!currentRoadmap) {
@@ -397,6 +406,45 @@ export const RoadmapsTab: React.FC<RoadmapsTabProps> = ({
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 cursor-pointer shadow-xs"
               >
                 Đã hiểu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Error Toast */}
+      {deleteErrorMsg && (
+        <div className="fixed bottom-6 right-6 z-50 bg-rose-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-semibold animate-in fade-in slide-in-from-bottom-3">
+          <span>⚠️ {deleteErrorMsg}</span>
+          <button onClick={() => setDeleteErrorMsg(null)} className="ml-2 text-white/80 hover:text-white cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {/* Delete Roadmap Confirmation Modal */}
+      {showConfirmDeleteId && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl animate-in fade-in zoom-in-95 border border-slate-200">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 mx-auto flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Xóa lịch trình luyện tập?</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Bạn có chắc chắn muốn xóa lộ trình này không? Hành động này không thể hoàn tác.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setShowConfirmDeleteId(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                onClick={confirmDeleteRoadmap}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition cursor-pointer shadow-md shadow-rose-600/25"
+              >
+                Xóa lộ trình
               </button>
             </div>
           </div>

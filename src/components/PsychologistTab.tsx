@@ -111,6 +111,7 @@ export const PsychologistTab: React.FC<PsychologistTabProps> = ({
   const [selectedMood, setSelectedMood] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [showBreathingModal, setShowBreathingModal] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
   const [breathingStep, setBreathingStep] = useState<'inhale' | 'hold' | 'exhale'>('inhale');
   const [breathingCount, setBreathingCount] = useState(4);
 
@@ -209,16 +210,19 @@ export const PsychologistTab: React.FC<PsychologistTabProps> = ({
   };
 
   const handleResetChat = () => {
-    if (window.confirm('Bạn có muốn bắt đầu một buổi trò chuyện mới với An Nhiên không? (Lịch sử trò chuyện cũ sẽ được làm mới)')) {
-      const freshWelcome: ChatMessage = {
-        id: `msg-welcome-${Date.now()}`,
-        role: 'model',
-        content: `Chào ${displayName}! Mình là An Nhiên đây 🌿\n\n*nhẹ nhàng mỉm cười và rót một tách trà ấm*\n\nCuộc trò chuyện mới đã sẵn sàng. Hôm nay của bạn thế nào rồi? Có điều gì trong lòng bạn muốn cùng mình chia sẻ hay tháo gỡ không?`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages([freshWelcome]);
-      localStorage.removeItem('edutrack_psychologist_chat');
-    }
+    setShowResetModal(true);
+  };
+
+  const confirmResetChat = () => {
+    const freshWelcome: ChatMessage = {
+      id: `msg-welcome-${Date.now()}`,
+      role: 'model',
+      content: `Chào ${displayName}! Mình là An Nhiên đây 🌿\n\n*nhẹ nhàng mỉm cười và rót một tách trà ấm*\n\nCuộc trò chuyện mới đã sẵn sàng. Hôm nay của bạn thế nào rồi? Có điều gì trong lòng bạn muốn cùng mình chia sẻ hay tháo gỡ không?`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages([freshWelcome]);
+    localStorage.removeItem('edutrack_psychologist_chat');
+    setShowResetModal(false);
   };
 
   return (
@@ -622,6 +626,37 @@ export const PsychologistTab: React.FC<PsychologistTabProps> = ({
                 className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs transition cursor-pointer shadow-md shadow-teal-600/20"
               >
                 Tôi Đã Cảm Thấy Dễ Chịu Hơn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Chat Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl animate-in fade-in zoom-in-95 border border-slate-200">
+            <div className="w-12 h-12 rounded-2xl bg-teal-50 border border-teal-200 text-teal-600 mx-auto flex items-center justify-center">
+              <RefreshCw className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Bắt đầu trò chuyện mới?</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Lịch sử trao đổi trước đó sẽ được làm mới để bạn bắt đầu một buổi tâm sự hoàn toàn thảnh thơi cùng An Nhiên.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+              >
+                Giữ lại
+              </button>
+              <button
+                onClick={confirmResetChat}
+                className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs transition cursor-pointer shadow-md shadow-teal-600/25"
+              >
+                Bắt đầu mới
               </button>
             </div>
           </div>

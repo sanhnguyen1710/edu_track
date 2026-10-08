@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -760,7 +761,11 @@ VĂN PHONG:
 
 // Setup Vite middleware in dev or static files in production
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isDev = process.env.NODE_ENV === 'development';
+  const distDir = path.join(__dirname, 'dist');
+  const hasDist = fs.existsSync(path.join(distDir, 'index.html'));
+
+  if (isDev || !hasDist) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -768,9 +773,12 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
+    app.use(express.static(distDir));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+      if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ success: false, error: 'API route not found' });
+      }
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
