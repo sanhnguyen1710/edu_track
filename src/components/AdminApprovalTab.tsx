@@ -15,7 +15,9 @@ import {
   RefreshCw,
   LogOut,
   Sparkles,
-  Trash2
+  Trash2,
+  PlusCircle,
+  UserPlus
 } from 'lucide-react';
 import { RegistrationRequest, UserSession } from '../types';
 
@@ -27,6 +29,8 @@ interface AdminApprovalTabProps {
   onRefreshRequests: () => void;
   onLogoutAdmin: () => void;
   onDeleteRequest?: (requestId: string) => void;
+  onBatchApprovePending?: () => void;
+  onDirectCreateUser?: (req: RegistrationRequest) => void;
 }
 
 export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
@@ -37,13 +41,28 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
   onRefreshRequests,
   onLogoutAdmin,
   onDeleteRequest,
+  onBatchApprovePending,
+  onDirectCreateUser,
 }) => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [filterRole, setFilterRole] = useState<'all' | 'teacher' | 'student'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [rejectingReqId, setRejectingReqId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Thông tin trường lớp chưa rõ ràng');
+  const [deletingReqId, setDeletingReqId] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Direct Account Creation Form State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createRole, setCreateRole] = useState<'student' | 'teacher'>('student');
+  const [createFullName, setCreateFullName] = useState('');
+  const [createUsername, setCreateUsername] = useState('');
+  const [createPassword, setCreatePassword] = useState('123456');
+  const [createClassRoom, setCreateClassRoom] = useState('11A1');
+  const [createSchool, setCreateSchool] = useState('THPT Chu Văn An');
+  const [createTitle, setCreateTitle] = useState('');
+  const [createStudentCode, setCreateStudentCode] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Statistics
   const pendingCount = requests.filter(r => r.status === 'pending').length;
@@ -76,6 +95,71 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
     setTimeout(() => setSuccessToast(null), 3500);
   };
 
+  const handleRefreshWithToast = () => {
+    onRefreshRequests();
+    setSuccessToast('Đã làm mới và đồng bộ danh sách tài khoản thành công!');
+    setTimeout(() => setSuccessToast(null), 3000);
+  };
+
+  const handleDirectCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError(null);
+
+    const nameClean = createFullName.trim();
+    const userClean = createUsername.trim();
+    const passClean = createPassword.trim();
+    const classClean = createClassRoom.trim();
+    const schoolClean = createSchool.trim();
+
+    if (!nameClean) {
+      setCreateError('Vui lòng nhập họ và tên!');
+      return;
+    }
+    if (!userClean || userClean.length < 3) {
+      setCreateError('Tên đăng nhập phải có ít nhất 3 ký tự!');
+      return;
+    }
+    if (requests.some(r => r.username.toLowerCase() === userClean.toLowerCase())) {
+      setCreateError('Tên đăng nhập này đã tồn tại trong hệ thống!');
+      return;
+    }
+    if (!passClean) {
+      setCreateError('Vui lòng nhập mật khẩu!');
+      return;
+    }
+
+    const newReq: RegistrationRequest = {
+      id: `req-${Date.now()}`,
+      role: createRole,
+      fullName: nameClean,
+      username: userClean,
+      password: passClean,
+      classRoom: classClean || '11A1',
+      schoolName: schoolClean || 'THPT Chu Văn An',
+      title: createRole === 'teacher' ? (createTitle.trim() || 'Giáo viên Bộ môn') : undefined,
+      studentCode: createRole === 'student' ? (createStudentCode.trim() || `HS2026-${Math.floor(1000 + Math.random() * 9000)}`) : undefined,
+      status: 'approved',
+      createdAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+      processedBy: 'adminedu',
+    };
+
+    if (onDirectCreateUser) {
+      onDirectCreateUser(newReq);
+    } else {
+      onApproveRequest(newReq.id);
+    }
+
+    setShowCreateModal(false);
+    setCreateFullName('');
+    setCreateUsername('');
+    setCreatePassword('123456');
+    setCreateTitle('');
+    setCreateStudentCode('');
+    setSuccessToast(`Đã cấp và kích hoạt thành công tài khoản cho "${nameClean}"!`);
+    setTimeout(() => setSuccessToast(null), 4000);
+  };
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Admin Top Header Banner */}
@@ -94,14 +178,26 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 flex-wrap shrink-0">
             <button
-              onClick={onRefreshRequests}
+              onClick={() => {
+                setShowCreateModal(true);
+                setCreateError(null);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-900/40"
+              title="Cấp tài khoản mới cho giáo viên hoặc học sinh"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>➕ Cấp Tài Khoản Mới</span>
+            </button>
+
+            <button
+              onClick={handleRefreshWithToast}
               className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition flex items-center gap-1.5 cursor-pointer border border-white/10"
-              title="Làm mới danh sách"
+              title="Làm mới và đồng bộ danh sách"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>Làm mới</span>
+              <span>Đồng bộ & Làm mới</span>
             </button>
 
             <button
@@ -109,7 +205,7 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
               className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-900/30"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>Đăng xuất Admin</span>
+              <span>Đăng xuất</span>
             </button>
           </div>
         </div>
@@ -143,6 +239,40 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Alert Banner for Pending Requests */}
+      {pendingCount > 0 && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-amber-500/30">
+              <Clock className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
+                <span>Có {pendingCount} yêu cầu tạo tài khoản đang chờ phê duyệt!</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-amber-950">MỚI</span>
+              </h4>
+              <p className="text-xs text-amber-300/90 mt-0.5">
+                Nhấn "✅ Chấp nhận phê duyệt" trên từng tài khoản hoặc nhấn nút bên phải để kích hoạt toàn bộ.
+              </p>
+            </div>
+          </div>
+
+          {onBatchApprovePending && (
+            <button
+              onClick={() => {
+                onBatchApprovePending();
+                setSuccessToast(`Đã phê duyệt thành công toàn bộ ${pendingCount} yêu cầu!`);
+                setTimeout(() => setSuccessToast(null), 3500);
+              }}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md shrink-0 self-stretch sm:self-auto"
+            >
+              <Check className="w-4 h-4" />
+              <span>Duyệt Tất Cả ({pendingCount} yêu cầu)</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Toast Notification */}
       {successToast && (
@@ -291,11 +421,7 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
                 <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
                   {onDeleteRequest && (
                     <button
-                      onClick={() => {
-                        if (confirm(`Bạn có chắc muốn xóa yêu cầu của "${req.fullName}"?`)) {
-                          onDeleteRequest(req.id);
-                        }
-                      }}
+                      onClick={() => setDeletingReqId(req.id)}
                       className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
                       title="Xóa yêu cầu này"
                     >
@@ -396,6 +522,233 @@ export const AdminApprovalTab: React.FC<AdminApprovalTabProps> = ({
                 Xác nhận từ chối
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingReqId && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 text-slate-800">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 text-center">
+              Xóa Yêu Cầu Này?
+            </h3>
+            <p className="text-xs text-slate-500 text-center mt-1.5 leading-relaxed">
+              Hành động này sẽ xóa vĩnh viễn yêu cầu này khỏi hệ thống.
+            </p>
+
+            <div className="flex items-center gap-2 pt-5">
+              <button
+                onClick={() => setDeletingReqId(null)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer transition"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                onClick={() => {
+                  if (onDeleteRequest && deletingReqId) {
+                    onDeleteRequest(deletingReqId);
+                    setSuccessToast('Đã xóa yêu cầu thành công!');
+                    setTimeout(() => setSuccessToast(null), 3000);
+                  }
+                  setDeletingReqId(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition cursor-pointer shadow-md shadow-rose-900/20"
+              >
+                Xóa ngay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Direct Create & Activate User by Admin */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 text-slate-900 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    Cấp / Tạo Tài Khoản Mới
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Kích hoạt ngay không cần chờ duyệt
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {createError && (
+              <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{createError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleDirectCreateSubmit} className="space-y-3.5 mt-4 text-xs">
+              {/* Role Switcher */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Vai trò người dùng *
+                </label>
+                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setCreateRole('student')}
+                    className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      createRole === 'student'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <User className="w-4 h-4" />
+                    <span>👨‍🎓 Học Sinh</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCreateRole('teacher')}
+                    className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                      createRole === 'teacher'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    <span>👩‍🏫 Giáo Viên</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Họ và tên *
+                </label>
+                <input
+                  type="text"
+                  value={createFullName}
+                  onChange={(e) => setCreateFullName(e.target.value)}
+                  placeholder={createRole === 'teacher' ? 'Thầy Nguyễn Văn C' : 'Trần Minh Anh'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Tên đăng nhập *
+                  </label>
+                  <input
+                    type="text"
+                    value={createUsername}
+                    onChange={(e) => setCreateUsername(e.target.value)}
+                    placeholder="user2026"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Mật khẩu khởi tạo *
+                  </label>
+                  <input
+                    type="text"
+                    value={createPassword}
+                    onChange={(e) => setCreatePassword(e.target.value)}
+                    placeholder="123456"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Lớp *
+                  </label>
+                  <input
+                    type="text"
+                    value={createClassRoom}
+                    onChange={(e) => setCreateClassRoom(e.target.value)}
+                    placeholder="11A1"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-semibold text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Trường học *
+                  </label>
+                  <input
+                    type="text"
+                    value={createSchool}
+                    onChange={(e) => setCreateSchool(e.target.value)}
+                    placeholder="THPT Chu Văn An"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              {createRole === 'teacher' ? (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Chức danh / Bộ môn giảng dạy
+                  </label>
+                  <input
+                    type="text"
+                    value={createTitle}
+                    onChange={(e) => setCreateTitle(e.target.value)}
+                    placeholder="Giáo viên Bộ môn Hóa học"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Mã học sinh vnEdu (tùy chọn)
+                  </label>
+                  <input
+                    type="text"
+                    value={createStudentCode}
+                    onChange={(e) => setCreateStudentCode(e.target.value)}
+                    placeholder="HS2026-9900"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-medium text-black bg-white focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400"
+                  />
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center gap-1.5 cursor-pointer shadow-md shadow-emerald-900/20"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Tạo & Kích Hoạt Ngay</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

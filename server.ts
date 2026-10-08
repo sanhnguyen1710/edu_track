@@ -199,7 +199,10 @@ interface RegistrationRequestServer {
   rejectionReason?: string;
 }
 
-let registrationRequests: RegistrationRequestServer[] = [
+const DATA_DIR = path.join(__dirname, 'data');
+const REQUESTS_FILE = path.join(DATA_DIR, 'registration_requests.json');
+
+const initialRegistrationRequests: RegistrationRequestServer[] = [
   {
     id: 'student-nguyenvanA',
     role: 'student',
@@ -267,6 +270,34 @@ let registrationRequests: RegistrationRequestServer[] = [
     processedBy: 'adminedu',
   },
 ];
+
+function loadRegistrationRequests(): RegistrationRequestServer[] {
+  try {
+    if (fs.existsSync(REQUESTS_FILE)) {
+      const data = fs.readFileSync(REQUESTS_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error loading registration_requests.json:', err);
+  }
+  return [...initialRegistrationRequests];
+}
+
+function saveRegistrationRequests(requests: RegistrationRequestServer[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(REQUESTS_FILE, JSON.stringify(requests, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving registration_requests.json:', err);
+  }
+}
+
+let registrationRequests: RegistrationRequestServer[] = loadRegistrationRequests();
 
 // API: Auth Login Endpoint (Admin & Registered Users)
 app.post('/api/auth/login', (req, res) => {
@@ -355,30 +386,78 @@ app.get('/api/registration-requests', (req, res) => {
   res.json({ success: true, requests: registrationRequests });
 });
 
-// API: Create Registration Request
+// API: Create Registration Request (Supports direct approval or pending approval)
 app.post('/api/registration-requests', (req, res) => {
   try {
-    const { role, fullName, username, password, classRoom, schoolName, title, studentCode } = req.body;
+    const { role, fullName, username, password, classRoom, schoolName, title, studentCode, status, processedBy } = req.body;
     if (!fullName || !username) {
       return res.status(400).json({ success: false, error: 'Thiếu thông tin đăng ký bắt buộc!' });
     }
 
+    const cleanUser = username.trim();
+    // Check if user already exists
+    const existingIndex = registrationRequests.findIndex(
+      r => r.username.toLowerCase() === cleanUser.toLowerCase()
+    );
+
+    const isDirectApproved = status === 'approved';
+
     const newReq: RegistrationRequestServer = {
-      id: `req-${Date.now()}`,
+      id: req.body.id || `req-${Date.now()}`,
       role: role || 'student',
-      fullName,
-      username,
+      fullName: fullName.trim(),
+      username: cleanUser,
       password: password || '123456',
       classRoom: classRoom || '11A1',
       schoolName: schoolName || 'THPT Chu Văn An',
       title: title || (role === 'teacher' ? 'Giáo viên Bộ môn' : undefined),
       studentCode: studentCode || (role === 'student' ? `HS2026-${Math.floor(1000 + Math.random() * 9000)}` : undefined),
-      status: 'pending',
-      createdAt: new Date().toISOString(),
+      status: isDirectApproved ? 'approved' : 'pending',
+      createdAt: req.body.createdAt || new Date().toISOString(),
+      processedAt: isDirectApproved ? new Date().toISOString() : undefined,
+      processedBy: isDirectApproved ? (processedBy || 'adminedu') : undefined,
     };
 
-    registrationRequests.unshift(newReq);
+    if (existingIndex >= 0) {
+      registrationRequests[existingIndex] = {
+        ...registrationRequests[existingIndex],
+        ...newReq,
+      };
+    } else {
+      registrationRequests.unshift(newReq);
+    }
+
+    saveRegistrationRequests(registrationRequests);
     res.json({ success: true, request: newReq });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Batch Sync Registration Requests (Frontend sync)
+app.post('/api/registration-requests/sync', (req, res) => {
+  try {
+    const incoming: RegistrationRequestServer[] = req.body.requests;
+    if (Array.isArray(incoming)) {
+      const map = new Map<string, RegistrationRequestServer>();
+      // First put existing server items
+      registrationRequests.forEach(r => map.set(r.username.toLowerCase(), r));
+      // Merge incoming client items
+      incoming.forEach(inc => {
+        if (!inc || !inc.username) return;
+        const key = inc.username.toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, inc);
+        } else {
+          // If incoming is more updated (e.g. approved or has id)
+          const existing = map.get(key)!;
+          map.set(key, { ...existing, ...inc });
+        }
+      });
+      registrationRequests = Array.from(map.values());
+      saveRegistrationRequests(registrationRequests);
+    }
+    res.json({ success: true, requests: registrationRequests });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -396,6 +475,7 @@ app.put('/api/registration-requests/:id/approve', (req, res) => {
   found.processedAt = new Date().toISOString();
   found.processedBy = 'adminedu';
 
+  saveRegistrationRequests(registrationRequests);
   res.json({ success: true, request: found });
 });
 
@@ -413,6 +493,7 @@ app.put('/api/registration-requests/:id/reject', (req, res) => {
   found.processedBy = 'adminedu';
   found.rejectionReason = reason || 'Thông tin chưa hợp lệ';
 
+  saveRegistrationRequests(registrationRequests);
   res.json({ success: true, request: found });
 });
 
@@ -424,6 +505,7 @@ app.delete('/api/registration-requests/:id', (req, res) => {
   if (registrationRequests.length === initialLen) {
     return res.status(404).json({ success: false, error: 'Không tìm thấy yêu cầu để xóa' });
   }
+  saveRegistrationRequests(registrationRequests);
   res.json({ success: true, message: 'Đã xóa yêu cầu thành công' });
 });
 

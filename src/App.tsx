@@ -206,7 +206,7 @@ export default function App() {
     localStorage.setItem('edutrack_roadmaps', JSON.stringify(activeRoadmaps));
   }, [activeRoadmaps]);
 
-  // Load Community Goals from Backend Server on mount
+  // Load Community Goals & Sync Registration Requests from Backend Server on mount
   useEffect(() => {
     fetch('/api/community-goals')
       .then(res => res.json())
@@ -221,14 +221,77 @@ export default function App() {
       })
       .catch(err => console.log('Community goals offline sync:', err));
 
-    fetch('/api/registration-requests')
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && data.requests) {
-          setRegistrationRequests(data.requests);
+    // Robust Sync: Merge Server requests with LocalStorage requests
+    const syncRequests = async () => {
+      try {
+        const localSaved = localStorage.getItem('edutrack_requests');
+        const localList: RegistrationRequest[] = localSaved ? JSON.parse(localSaved) : [];
+
+        const res = await fetch('/api/registration-requests');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.requests)) {
+          const map = new Map<string, RegistrationRequest>();
+          // 1. Put server requests
+          data.requests.forEach((r: RegistrationRequest) => {
+            if (r.username) map.set(r.username.toLowerCase(), r);
+          });
+          // 2. Merge local requests so pending/approved items created on client aren't lost
+          localList.forEach((r: RegistrationRequest) => {
+            if (!r.username) return;
+            const key = r.username.toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, r);
+            } else {
+              const serverItem = map.get(key)!;
+              if (r.status === 'approved' && serverItem.status !== 'approved') {
+                map.set(key, { ...serverItem, ...r });
+              }
+            }
+          });
+          const merged = Array.from(map.values());
+          setRegistrationRequests(merged);
+          localStorage.setItem('edutrack_requests', JSON.stringify(merged));
+
+          // Sync back merged list to server so file on disk has full records
+          fetch('/api/registration-requests/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requests: merged }),
+          }).catch(() => {});
         }
-      })
-      .catch(err => console.log('Requests offline sync:', err));
+      } catch (err) {
+        console.log('Requests offline sync:', err);
+      }
+    };
+
+    syncRequests();
+
+    // Cross-tab synchronization via BroadcastChannel & Storage Event
+    const bc = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('edutrack_sync') : null;
+    if (bc) {
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'REGISTRATION_UPDATED' && Array.isArray(event.data.requests)) {
+          setRegistrationRequests(event.data.requests);
+        }
+      };
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'edutrack_requests' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setRegistrationRequests(parsed);
+          }
+        } catch (_) {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      if (bc) bc.close();
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   // Calculated Metrics
@@ -264,8 +327,64 @@ export default function App() {
     setIsAuthModalOpen(false);
   };
 
+  const provisionStudentInRoster = (targetReq: RegistrationRequest) => {
+    const alreadyInRoster = studentsRoster.some(
+      st => (st.profile.username && st.profile.username.toLowerCase() === targetReq.username.toLowerCase()) || st.profile.id === targetReq.id
+    );
+    if (!alreadyInRoster) {
+      const newProfile: StudentProfile = {
+        id: targetReq.id,
+        username: targetReq.username,
+        fullName: targetReq.fullName,
+        studentCode: targetReq.studentCode || `HS2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        classRoom: targetReq.classRoom || '11A1',
+        schoolName: targetReq.schoolName || 'THPT Chu Văn An',
+        academicYear: '2025 - 2026',
+        semester: 'hk2',
+        standard: 'tt22',
+        conduct: 'Tốt',
+        isGradeLocked: true, // Học sinh không thể tự sửa điểm
+        certificates: [],
+        achievements: [],
+        teacherComments: [],
+      };
+
+      const newRecord: StudentRecord = {
+        profile: newProfile,
+        subjects: initialSubjects.map(s => ({
+          ...s,
+          regularGrades: [8.0, 8.0],
+          midtermGrade: 8.0,
+          finalGrade: 8.0,
+          averageGrade: 8.0,
+        })),
+      };
+
+      setStudentsRoster(prev => {
+        const updated = [newRecord, ...prev];
+        localStorage.setItem('edutrack_roster', JSON.stringify(updated));
+        return updated;
+      });
+    }
+  };
+
   const handleNewRequestSubmitted = (newReq: RegistrationRequest) => {
-    setRegistrationRequests(prev => [newReq, ...prev.filter(r => r.id !== newReq.id)]);
+    setRegistrationRequests(prev => {
+      const updated = [newReq, ...prev.filter(r => r.username.toLowerCase() !== newReq.username.toLowerCase())];
+      localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          const ch = new BroadcastChannel('edutrack_sync');
+          ch.postMessage({ type: 'REGISTRATION_UPDATED', requests: updated });
+          ch.close();
+        } catch (_) {}
+      }
+      return updated;
+    });
+
+    if (newReq.status === 'approved' && newReq.role === 'student') {
+      provisionStudentInRoster(newReq);
+    }
   };
 
   // Admin Request Handlers
@@ -281,53 +400,80 @@ export default function App() {
 
     // 2. Update local requests
     const targetReq = registrationRequests.find(r => r.id === requestId);
-    setRegistrationRequests(prev => prev.map(r => {
-      if (r.id === requestId) {
-        return {
-          ...r,
-          status: 'approved',
-          processedAt: new Date().toISOString(),
-          processedBy: 'adminedu',
-        };
+    setRegistrationRequests(prev => {
+      const updated = prev.map(r => {
+        if (r.id === requestId) {
+          return {
+            ...r,
+            status: 'approved' as const,
+            processedAt: new Date().toISOString(),
+            processedBy: 'adminedu',
+          };
+        }
+        return r;
+      });
+      localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          const ch = new BroadcastChannel('edutrack_sync');
+          ch.postMessage({ type: 'REGISTRATION_UPDATED', requests: updated });
+          ch.close();
+        } catch (_) {}
       }
-      return r;
-    }));
+      return updated;
+    });
 
     // 3. If it's a student, provision a StudentRecord in the class roster so teachers can grade them
     if (targetReq && targetReq.role === 'student') {
-      const alreadyInRoster = studentsRoster.some(st => st.profile.username === targetReq.username || st.profile.id === targetReq.id);
-      if (!alreadyInRoster) {
-        const newProfile: StudentProfile = {
-          id: targetReq.id,
-          username: targetReq.username,
-          fullName: targetReq.fullName,
-          studentCode: targetReq.studentCode || `HS2026-${Math.floor(1000 + Math.random() * 9000)}`,
-          classRoom: targetReq.classRoom || '11A1',
-          schoolName: targetReq.schoolName || 'THPT Chu Văn An',
-          academicYear: '2025 - 2026',
-          semester: 'hk2',
-          standard: 'tt22',
-          conduct: 'Tốt',
-          isGradeLocked: true, // Học sinh không thể tự sửa điểm
-          certificates: [],
-          achievements: [],
-          teacherComments: [],
-        };
+      provisionStudentInRoster(targetReq);
+    }
+  };
 
-        const newRecord: StudentRecord = {
-          profile: newProfile,
-          subjects: initialSubjects.map(s => ({
-            ...s,
-            regularGrades: [8.0, 8.0],
-            midtermGrade: 8.0,
-            finalGrade: 8.0,
-            averageGrade: 8.0,
-          })),
-        };
-
-        setStudentsRoster(prev => [newRecord, ...prev]);
+  const handleBatchApprovePending = async () => {
+    const pendingList = registrationRequests.filter(r => r.status === 'pending');
+    for (const req of pendingList) {
+      try {
+        await fetch(`/api/registration-requests/${req.id}/approve`, { method: 'PUT' });
+      } catch (_) {}
+      if (req.role === 'student') {
+        provisionStudentInRoster(req);
       }
     }
+    setRegistrationRequests(prev => {
+      const updated = prev.map(r => r.status === 'pending' ? {
+        ...r,
+        status: 'approved' as const,
+        processedAt: new Date().toISOString(),
+        processedBy: 'adminedu',
+      } : r);
+      localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          const ch = new BroadcastChannel('edutrack_sync');
+          ch.postMessage({ type: 'REGISTRATION_UPDATED', requests: updated });
+          ch.close();
+        } catch (_) {}
+      }
+      return updated;
+    });
+  };
+
+  const handleDirectCreateUser = async (newReq: RegistrationRequest) => {
+    const approvedReq: RegistrationRequest = {
+      ...newReq,
+      status: 'approved',
+      processedAt: new Date().toISOString(),
+      processedBy: 'adminedu',
+    };
+    try {
+      await fetch('/api/registration-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(approvedReq),
+      });
+    } catch (_) {}
+
+    handleNewRequestSubmitted(approvedReq);
   };
 
   const handleRejectRequest = async (requestId: string, reason?: string) => {
@@ -341,18 +487,22 @@ export default function App() {
       console.log('Reject API offline:', err);
     }
 
-    setRegistrationRequests(prev => prev.map(r => {
-      if (r.id === requestId) {
-        return {
-          ...r,
-          status: 'rejected',
-          processedAt: new Date().toISOString(),
-          processedBy: 'adminedu',
-          rejectionReason: reason || 'Thông tin chưa hợp lệ',
-        };
-      }
-      return r;
-    }));
+    setRegistrationRequests(prev => {
+      const updated = prev.map(r => {
+        if (r.id === requestId) {
+          return {
+            ...r,
+            status: 'rejected' as const,
+            processedAt: new Date().toISOString(),
+            processedBy: 'adminedu',
+            rejectionReason: reason || 'Thông tin chưa hợp lệ',
+          };
+        }
+        return r;
+      });
+      localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const handleDeleteRequest = async (requestId: string) => {
@@ -364,18 +514,45 @@ export default function App() {
       console.log('Delete API offline:', err);
     }
 
-    setRegistrationRequests(prev => prev.filter(r => r.id !== requestId));
+    setRegistrationRequests(prev => {
+      const updated = prev.filter(r => r.id !== requestId);
+      localStorage.setItem('edutrack_requests', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const handleRefreshRequests = () => {
     fetch('/api/registration-requests')
       .then(res => res.json())
       .then(data => {
-        if (data.success && data.requests) {
-          setRegistrationRequests(data.requests);
+        if (data.success && Array.isArray(data.requests)) {
+          const localSaved = localStorage.getItem('edutrack_requests');
+          const localList: RegistrationRequest[] = localSaved ? JSON.parse(localSaved) : [];
+          const map = new Map<string, RegistrationRequest>();
+          data.requests.forEach((r: RegistrationRequest) => {
+            if (r.username) map.set(r.username.toLowerCase(), r);
+          });
+          localList.forEach((r: RegistrationRequest) => {
+            if (!r.username) return;
+            const key = r.username.toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, r);
+            }
+          });
+          const merged = Array.from(map.values());
+          setRegistrationRequests(merged);
+          localStorage.setItem('edutrack_requests', JSON.stringify(merged));
         }
       })
-      .catch(err => console.log('Refresh error:', err));
+      .catch(err => {
+        console.log('Refresh error:', err);
+        const localSaved = localStorage.getItem('edutrack_requests');
+        if (localSaved) {
+          try {
+            setRegistrationRequests(JSON.parse(localSaved));
+          } catch (_) {}
+        }
+      });
   };
 
   const handleSelectStudent = (id: string) => {
@@ -572,6 +749,8 @@ export default function App() {
             onDeleteRequest={handleDeleteRequest}
             onRefreshRequests={handleRefreshRequests}
             onLogoutAdmin={handleLogout}
+            onBatchApprovePending={handleBatchApprovePending}
+            onDirectCreateUser={handleDirectCreateUser}
           />
         </main>
 

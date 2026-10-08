@@ -17,7 +17,8 @@ import {
   ShieldCheck,
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 import { UserSession, UserRole, RegistrationRequest } from '../types';
 import { StudentRecord } from '../data/defaultData';
@@ -65,6 +66,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // State for submission confirmation
   const [submittedRequest, setSubmittedRequest] = useState<RegistrationRequest | null>(null);
+  const [regCreationMode, setRegCreationMode] = useState<'instant' | 'approval'>('instant');
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -274,6 +276,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       ? (regStudentCode.trim() || `HS2026-${Math.floor(1000 + Math.random() * 9000)}`) 
       : undefined;
 
+    const isInstant = regCreationMode === 'instant';
+
     const newRequest: RegistrationRequest = {
       id: `req-${Date.now()}`,
       role: selectedRole,
@@ -284,8 +288,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       schoolName: schoolClean,
       title: selectedRole === 'teacher' ? (regTitle.trim() || 'Giáo viên Bộ môn') : undefined,
       studentCode: generatedCode,
-      status: 'pending',
+      status: isInstant ? 'approved' : 'pending',
       createdAt: new Date().toISOString(),
+      processedAt: isInstant ? new Date().toISOString() : undefined,
+      processedBy: isInstant ? 'Hệ Thống vnEdu (Tự động kích hoạt)' : undefined,
     };
 
     try {
@@ -296,23 +302,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         body: JSON.stringify(newRequest),
       });
       const data = await res.json();
-      if (data.success && data.request) {
-        if (onNewRegistrationRequestSubmitted) {
-          onNewRegistrationRequestSubmitted(data.request);
-        }
-        setSubmittedRequest(data.request);
+      const finalRequest = (data.success && data.request) ? data.request : newRequest;
+
+      if (onNewRegistrationRequestSubmitted) {
+        onNewRegistrationRequestSubmitted(finalRequest);
+      }
+
+      if (isInstant) {
+        // Automatically sign in the user directly!
+        const userSession: UserSession = {
+          id: finalRequest.id,
+          username: finalRequest.username,
+          fullName: finalRequest.fullName,
+          role: finalRequest.role,
+          title: finalRequest.title,
+          studentCode: finalRequest.studentCode,
+          classRoom: finalRequest.classRoom,
+          schoolName: finalRequest.schoolName,
+        };
+        onLoginSuccess(userSession, finalRequest.id);
+        onClose?.();
+        return;
       } else {
-        if (onNewRegistrationRequestSubmitted) {
-          onNewRegistrationRequestSubmitted(newRequest);
-        }
-        setSubmittedRequest(newRequest);
+        setSubmittedRequest(finalRequest);
       }
     } catch (err) {
       // Local fallback
       if (onNewRegistrationRequestSubmitted) {
         onNewRegistrationRequestSubmitted(newRequest);
       }
-      setSubmittedRequest(newRequest);
+      if (isInstant) {
+        const userSession: UserSession = {
+          id: newRequest.id,
+          username: newRequest.username,
+          fullName: newRequest.fullName,
+          role: newRequest.role,
+          title: newRequest.title,
+          studentCode: newRequest.studentCode,
+          classRoom: newRequest.classRoom,
+          schoolName: newRequest.schoolName,
+        };
+        onLoginSuccess(userSession, newRequest.id);
+        onClose?.();
+        return;
+      } else {
+        setSubmittedRequest(newRequest);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -421,11 +456,66 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 pt-1">
+              {/* Option 1: Quick Admin Login to Approve */}
+              <button
+                type="button"
+                onClick={() => {
+                  const adminSession: UserSession = {
+                    id: 'admin-01',
+                    username: 'adminedu',
+                    fullName: 'Quản Trị Viên Hệ Thống',
+                    role: 'admin',
+                    title: 'Quản trị viên vnEdu',
+                    schoolName: 'Hệ Thống vnEdu',
+                    classRoom: 'Ban Quản Trị',
+                  };
+                  onLoginSuccess(adminSession);
+                  onClose?.();
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs sm:text-sm transition cursor-pointer shadow-md flex items-center justify-center gap-2 border border-slate-700"
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>🔑 Đăng Nhập Admin (adminedu) Để Duyệt Ngay</span>
+              </button>
+
+              {/* Option 2: Instant Activate & Login */}
+              <button
+                type="button"
+                onClick={() => {
+                  const approvedReq: RegistrationRequest = {
+                    ...submittedRequest,
+                    status: 'approved',
+                    processedAt: new Date().toISOString(),
+                    processedBy: 'Hệ Thống (Kích hoạt nhanh)',
+                  };
+                  if (onNewRegistrationRequestSubmitted) {
+                    onNewRegistrationRequestSubmitted(approvedReq);
+                  }
+                  fetch(`/api/registration-requests/${submittedRequest.id}/approve`, { method: 'PUT' }).catch(() => {});
+                  const userSession: UserSession = {
+                    id: approvedReq.id,
+                    username: approvedReq.username,
+                    fullName: approvedReq.fullName,
+                    role: approvedReq.role,
+                    title: approvedReq.title,
+                    studentCode: approvedReq.studentCode,
+                    classRoom: approvedReq.classRoom,
+                    schoolName: approvedReq.schoolName,
+                  };
+                  onLoginSuccess(userSession, approvedReq.id);
+                  onClose?.();
+                }}
+                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm transition cursor-pointer shadow-md flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4 text-yellow-300" />
+                <span>⚡ Kích Hoạt & Đăng Nhập Tài Khoản Này Ngay</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleResetModal}
-                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm transition cursor-pointer shadow-md shadow-indigo-600/20"
+                className="w-full py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm transition cursor-pointer"
               >
                 Quay Lại Màn Hình Đăng Nhập
               </button>
@@ -555,6 +645,50 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             {/* FORM 2: REGISTER */}
             {authMode === 'register' && (
               <form onSubmit={handleRegisterSubmit} className="space-y-3.5 text-xs sm:text-sm">
+                {/* Creation Mode Switcher: Instant vs Approval */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
+                  <label className="block font-bold text-slate-800 text-xs">
+                    Hình thức tạo tài khoản *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRegCreationMode('instant')}
+                      className={`p-2.5 rounded-xl text-left border transition cursor-pointer flex flex-col justify-between ${
+                        regCreationMode === 'instant'
+                          ? 'bg-emerald-50/90 border-emerald-500 shadow-xs ring-1 ring-emerald-500'
+                          : 'bg-white border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Kích hoạt dùng ngay</span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1 leading-tight">
+                        Tự động duyệt • Đăng nhập ngay lập tức
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRegCreationMode('approval')}
+                      className={`p-2.5 rounded-xl text-left border transition cursor-pointer flex flex-col justify-between ${
+                        regCreationMode === 'approval'
+                          ? 'bg-indigo-50/90 border-indigo-500 shadow-xs ring-1 ring-indigo-500'
+                          : 'bg-white border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-800">
+                        <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Gửi duyệt Admin</span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1 leading-tight">
+                        Chờ Admin xác nhận phê duyệt
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Role Switcher */}
                 <div>
                   <label className="block font-bold text-slate-700 mb-1.5 text-xs">
@@ -724,18 +858,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     type="submit"
                     disabled={isLoading}
                     className={`w-full py-2.5 rounded-xl font-bold text-white text-xs sm:text-sm transition cursor-pointer shadow-md flex items-center justify-center gap-2 ${
-                      selectedRole === 'teacher'
+                      regCreationMode === 'instant'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                        : selectedRole === 'teacher'
                         ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/20'
                         : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
                     }`}
                   >
-                    <UserPlus className="w-4 h-4" />
-                    <span>{isLoading ? 'Đang gửi yêu cầu...' : 'Gửi Yêu Cầu Phê Duyệt Tạo Tài Khoản'}</span>
+                    {regCreationMode === 'instant' ? (
+                      <>
+                        <Sparkles className="w-4 h-4 text-yellow-300" />
+                        <span>{isLoading ? 'Đang tạo tài khoản...' : '⚡ Tạo & Đăng Nhập Tài Khoản Ngay'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-4 h-4" />
+                        <span>{isLoading ? 'Đang gửi yêu cầu...' : 'Gửi Yêu Cầu Phê Duyệt Đến Admin'}</span>
+                      </>
+                    )}
                   </button>
                 </div>
 
-                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-800 leading-relaxed">
-                  ⚠️ <strong>Lưu ý:</strong> Sau khi bạn ấn gửi, yêu cầu tạo tài khoản sẽ được chuyển đến <strong>Quản trị viên (Admin)</strong> để kiểm tra và phê duyệt. Bạn sẽ có thể đăng nhập ngay sau khi Admin duyệt.
+                <div className={`p-3 rounded-xl border text-[11px] leading-relaxed ${
+                  regCreationMode === 'instant'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-amber-50 border-amber-200 text-amber-800'
+                }`}>
+                  {regCreationMode === 'instant' ? (
+                    <>
+                      ✨ <strong>Kích hoạt trực tiếp:</strong> Tài khoản của bạn sẽ được kích hoạt ngay lập tức. Sau khi bấm, bạn sẽ đăng nhập thẳng vào hệ thống mà không cần chờ Admin duyệt.
+                    </>
+                  ) : (
+                    <>
+                      ⚠️ <strong>Chờ Admin duyệt:</strong> Yêu cầu tạo tài khoản sẽ được chuyển đến <strong>Quản trị viên (adminedu)</strong> để kiểm tra và phê duyệt. Bạn có thể đăng nhập sau khi Admin xác nhận.
+                    </>
+                  )}
                 </div>
 
                 <div className="pt-1 text-center text-xs text-slate-500">
